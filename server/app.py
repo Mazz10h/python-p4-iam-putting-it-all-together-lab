@@ -8,19 +8,140 @@ from config import app, db, api
 from models import User, Recipe
 
 class Signup(Resource):
-    pass
-
+    def post(self):
+        data = request.get_json()
+        
+        username = data.get('username')
+        password = data.get('password')
+        image_url = data.get('image_url', '')
+        bio = data.get('bio', '')
+        
+        if not username:
+            return {'error': 'Username is required'}, 422
+        
+        if not password:
+            return {'error': 'Password is required'}, 422
+        
+        try:
+            user = User(
+                username=username,
+                image_url=image_url,
+                bio=bio
+            )
+            user.password_hash = password
+            
+            db.session.add(user)
+            db.session.commit()
+            
+            session['user_id'] = user.id
+            
+            return {
+                'id': user.id,
+                'username': user.username,
+                'image_url': user.image_url,
+                'bio': user.bio
+            }, 201
+            
+        except IntegrityError:
+            db.session.rollback()
+            return {'error': 'Username already exists'}, 422
+        
 class CheckSession(Resource):
-    pass
+    def get(self):
+        user_id = session.get('user_id')
+        
+        if user_id:
+            user = User.query.get(user_id)
+            if user:
+                return {
+                    'id': user.id,
+                    'username': user.username,
+                    'image_url': user.image_url,
+                    'bio': user.bio
+                }, 200
+        
+        return {'error': 'Unauthorized'}, 401
 
 class Login(Resource):
-    pass
+    def post(self):
+        data = request.get_json()
+        
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return {'error': 'Username and password required'}, 401
+        
+        user = User.query.filter_by(username=username).first()
+        
+        if user and user.authenticate(password):
+            session['user_id'] = user.id
+            return {
+                'id': user.id,
+                'username': user.username,
+                'image_url': user.image_url,
+                'bio': user.bio
+            }, 200
+        
+        return {'error': 'Invalid username or password'}, 401
 
 class Logout(Resource):
-    pass
+    def delete(self):
+        if session.get('user_id'):
+            session.pop('user_id', None)
+            return {}, 204
+        return {'error': 'Unauthorized'}, 401
 
 class RecipeIndex(Resource):
-    pass
+    def get(self):
+        user_id = session.get('user_id')
+        
+        if not user_id:
+            return {'error': 'Unauthorized'}, 401
+        
+        user = User.query.get(user_id)
+        if not user:
+            return {'error': 'User not found'}, 404
+        
+        recipes = Recipe.query.filter_by(user_id=user_id).all()
+        
+        return [recipe.to_dict(rules=('-user',)) for recipe in recipes], 200
+    
+    def post(self):
+        user_id = session.get('user_id')
+        
+        if not user_id:
+            return {'error': 'Unauthorized'}, 401
+        
+        user = User.query.get(user_id)
+        if not user:
+            return {'error': 'User not found'}, 404
+        
+        data = request.get_json()
+        
+        title = data.get('title')
+        instructions = data.get('instructions')
+        minutes_to_complete = data.get('minutes_to_complete')
+        
+        if not title or not instructions or not minutes_to_complete:
+            return {'error': 'Title, instructions, and minutes_to_complete are required'}, 422
+        
+        try:
+            recipe = Recipe(
+                title=title,
+                instructions=instructions,
+                minutes_to_complete=minutes_to_complete,
+                user_id=user_id
+            )
+            
+            db.session.add(recipe)
+            db.session.commit()
+            
+            return recipe.to_dict(rules=('-user',)), 201
+            
+        except (IntegrityError, ValueError) as e:
+            db.session.rollback()
+            return {'error': str(e) if hasattr(e, 'args') else 'Invalid data'}, 422
 
 api.add_resource(Signup, '/signup', endpoint='signup')
 api.add_resource(CheckSession, '/check_session', endpoint='check_session')
@@ -31,3 +152,4 @@ api.add_resource(RecipeIndex, '/recipes', endpoint='recipes')
 
 if __name__ == '__main__':
     app.run(port=5555, debug=True)
+
